@@ -1,0 +1,13 @@
+LIBS Depth Camera - Debug Package Guide
+=======================================
+
+Package: LIBSDepthCamera_Debug_win-x64.zip
+
+1. Extract the complete ZIP. Do not copy only the EXE.
+2. Double-click 启动调试版.bat to run with a console and save logs.
+3. Double-click 运行环境检测.bat to inspect dependencies and RealSense devices.
+4. When reporting a problem, attach logs/latest-debug.log and logs/diagnostics.txt.
+
+The package is self-contained and does not require a separate Python installation.
+RealSense D405 should be connected directly to a USB 3.x port.
+

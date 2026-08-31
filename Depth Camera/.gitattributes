@@ -1,0 +1,9 @@
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.zip binary
+*.whl binary
+*.png binary
+
