@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.spec
+build/
+dist/
+debug/
+data/
+Maria_*.csv
+.pytest_cache/
+.idea/
+.vscode/
