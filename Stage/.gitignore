@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+logs/
+exports/
+
+# PyInstaller intermediate and expanded output directories.
+# Keep the portable ZIP package and build instructions in Stage/debug.
+debug/build_debug/
+debug/dist_debug/
+debug/LIBSStageControl_Debug/

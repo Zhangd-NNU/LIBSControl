@@ -1,0 +1,17 @@
+LIBS 位移平台控制软件——调试包使用说明
+========================================
+
+1. 将整个 LIBSStageControl_Debug 文件夹复制到目标 Windows x64 电脑。
+2. 不要只复制 EXE；_internal 文件夹和厂商 DLL 必须保留。
+3. 双击 LIBSStageControl_Debug.exe，或在 PowerShell 中启动以查看控制台错误。
+4. 首次先使用仿真模式，再连接实机。
+5. 实机默认波特率为 115200；COM 端口以目标电脑设备管理器为准。
+6. 厂商软件与本软件不能同时占用同一个串口。
+7. 实机测试从 0.1 mm 步长、1 mm/s 速度开始，并确保硬件急停可用。
+
+保存调试输出：
+  .\LIBSStageControl_Debug.exe *> debug-output.txt
+
+反馈问题时请同时提供：Windows 版本、COM 端口、轴型号、操作步骤、
+界面截图和 debug-output.txt。
+
