@@ -1,0 +1,2 @@
+# Windows 版本仅使用 Python 标准库，无需安装第三方依赖。
+# 非 Windows 系统如需串口连接，可安装：pyserial>=3.5,<4

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.spec
+_build/
+build/
+dist/
+debug/
+.pytest_cache/
+.idea/
+.vscode/
+
