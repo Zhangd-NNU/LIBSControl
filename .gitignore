@@ -1,0 +1,58 @@
+# Operating-system and editor metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python environments, caches, and build output
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/venv/
+**/.pytest_cache/
+**/.laser-build-venv/
+**/build/
+**/dist/
+**/_build/
+**/*.log
+
+# Runtime output and local configuration
+**/captures/*
+!**/captures/.gitkeep
+**/recordings/
+**/logs/
+**/exports/
+**/data/*.csv
+**/Maria_*.csv
+**/config.json
+
+# Expanded debug bundles; keep only scripts, guides, specs, and ZIP releases
+/Displacement platform/debug/LIBSStageControl_Debug/
+/Timing controller/debug/LIBS_TimingController_Debug/
+/Spectrometer/debug/MariaSpectrometerDebug/
+/Laser/debug/DawaLaserControlDebug/
+/Camera/debug/LIBS-Camera-Control-Debug/
+/Depth Camera/debug/LIBSDepthCamera_Debug/
+
+# Locally cached dependency wheels
+/Depth Camera/software/downloads/
+
+# Local SDKs, vendor manuals, examples, and reference archives
+/0-example/
+/Displacement platform/*.zip
+/Timing controller/*.zip
+/Spectrometer/*.zip
+/Laser/*.jpg
+/Laser/*.doc
+/Laser/*.docx
+/Laser/*.pdf
+/Camera/*.pdf
+/Camera/*.rar
+/Camera/*.zip
+/Camera/*.chm
+/Depth Camera/01-SDK与工具/
+/Depth Camera/02-源码与示例/
+/Depth Camera/03-官方文档/
+/Depth Camera/04-Python快速开始/
+/Depth Camera/README-资料索引.md
+/Depth Camera/SHA256SUMS.txt
