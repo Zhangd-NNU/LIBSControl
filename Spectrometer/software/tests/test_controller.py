@@ -44,6 +44,14 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(all(len(item.wavelengths) == 1024 for item in spectra))
         controller.disconnect()
 
+    def test_simulator_connects_only_selected_channels(self):
+        controller = SimulationController(seed=1)
+        devices = controller.connect_usb(channels=[2, 4])
+        spectra = controller.acquire()
+        self.assertEqual([device.channel for device in devices], [2, 4])
+        self.assertEqual([spectrum.channel for spectrum in spectra], [2, 4])
+        controller.disconnect()
+
     def test_simulator_external_trigger_can_be_cancelled(self):
         controller = SimulationController(seed=1)
         controller.connect_usb()

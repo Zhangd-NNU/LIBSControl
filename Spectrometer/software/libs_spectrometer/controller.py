@@ -58,6 +58,7 @@ class NetworkDevice:
     ip: str
     port: int = 8888
     serial: str = ""
+    channel: int = 0
 
 
 def parse_oceanhood_announcement(payload: bytes, ip: str, port: int = 8888) -> NetworkDevice | None:
@@ -120,7 +121,7 @@ class BaseController:
     devices: list[DeviceInfo]
     connected: bool
 
-    def connect_usb(self, expected_channels: int = 4) -> list[DeviceInfo]:
+    def connect_usb(self, expected_channels: int = 4, channels: Iterable[int] | None = None) -> list[DeviceInfo]:
         raise NotImplementedError
 
     def connect_network(self, devices: Iterable[NetworkDevice]) -> list[DeviceInfo]:
@@ -238,19 +239,22 @@ class SeaSDKController(BaseController):
             connection=connection,
         )
 
-    def connect_usb(self, expected_channels: int = 4) -> list[DeviceInfo]:
+    def connect_usb(self, expected_channels: int = 4, channels: Iterable[int] | None = None) -> list[DeviceInfo]:
         with self._lock:
             self.disconnect()
             opened: list[DeviceInfo] = []
-            for index in range(expected_channels):
+            selected = sorted(set(channels or range(1, expected_channels + 1)))
+            for channel in selected:
+                if channel < 1 or channel > expected_channels:
+                    raise SpectrometerError(f"无效通道：CH{channel}")
+                index = channel - 1
                 error = ctypes.c_int(0)
                 result = self.lib.seasdk_open_spectrometer(index, ctypes.byref(error))
                 if result != 0 or error.value:
-                    if index == 0:
-                        raise self._error(error.value or 2, "打开 USB 光谱仪")
-                    break
+                    self.disconnect()
+                    raise self._error(error.value or 2, f"打开 USB 光谱仪 CH{channel}")
                 try:
-                    opened.append(self._read_device(len(opened) + 1, index, "USB"))
+                    opened.append(self._read_device(channel, index, "USB"))
                 except Exception:
                     self.lib.seasdk_close_spectrometer(index, ctypes.byref(error))
                     raise
@@ -279,7 +283,8 @@ class SeaSDKController(BaseController):
                 if result != 0 or error.value:
                     self.disconnect()
                     raise self._error(error.value or 2, f"打开网络设备 {item.ip}")
-                opened.append(self._read_device(len(opened) + 1, index, f"{item.ip}:{item.port}"))
+                channel = item.channel or len(opened) + 1
+                opened.append(self._read_device(channel, index, f"{item.ip}:{item.port}"))
             if not opened:
                 raise SpectrometerError("没有可连接的网络光谱仪")
             self.devices = opened
@@ -391,19 +396,22 @@ class SimulationController(BaseController):
         self._cancelled = threading.Event()
         self._frame = 0
 
-    def _connect(self, connection: str) -> list[DeviceInfo]:
+    def _connect(self, connection: str, channels: Iterable[int] | None = None) -> list[DeviceInfo]:
+        selected = set(channels or range(1, len(self.RANGES) + 1))
         self.devices = [
             DeviceInfo(i, i - 1, "Maria-SIM", f"SIM-{i:02d}", 1024, start, end, 6, 65_535_000, 65535, connection)
             for i, (start, end) in enumerate(self.RANGES, 1)
+            if i in selected
         ]
         self.connected = True
         return list(self.devices)
 
-    def connect_usb(self, expected_channels: int = 4) -> list[DeviceInfo]:
-        return self._connect("SIM / USB")[:expected_channels]
+    def connect_usb(self, expected_channels: int = 4, channels: Iterable[int] | None = None) -> list[DeviceInfo]:
+        return self._connect("SIM / USB", channels)
 
     def connect_network(self, devices: Iterable[NetworkDevice]) -> list[DeviceInfo]:
-        return self._connect("SIM / Ethernet")
+        items = list(devices)
+        return self._connect("SIM / Ethernet", (item.channel or index for index, item in enumerate(items, 1)))
 
     def configure(self, integration_us: int, averages: int, boxcar_width: int, trigger_mode: int, delay_us: float) -> None:
         if not self.connected:

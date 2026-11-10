@@ -293,6 +293,10 @@ class MariaApp(tk.Tk):
             "dll": str(source_root / "vendor" / "SeaSDK.dll"),
             "network_devices": "OH7020@24.5.10.31, OH7020@24.5.10.32, OH7020@24.5.10.33, OH7020@24.5.10.34",
             "port": "8888",
+            "connect_ch1": True,
+            "connect_ch2": True,
+            "connect_ch3": True,
+            "connect_ch4": True,
             "integration_us": "2000",
             "averages": "1",
             "hardware_boxcar": "0",
@@ -443,22 +447,27 @@ class MariaApp(tk.Tk):
         mode.grid(row=0, column=1, sticky="ew", pady=3)
         mode.bind("<<ComboboxSelected>>", lambda _: self._update_network_state())
         ttk.Checkbutton(box, text="使用仿真设备（推荐先试运行）", variable=self.v["simulation"]).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 6))
-        ttk.Label(box, text="SDK 文件").grid(row=2, column=0, sticky="w", pady=3)
-        ttk.Entry(box, textvariable=self.v["dll"], width=22).grid(row=2, column=1, sticky="ew", pady=3)
+        ttk.Label(box, text="连接通道").grid(row=2, column=0, sticky="w", pady=3)
+        channel_row = ttk.Frame(box, style="Panel.TFrame")
+        channel_row.grid(row=2, column=1, sticky="ew", pady=3)
+        for channel in range(1, 5):
+            ttk.Checkbutton(channel_row, text=f"CH{channel}", variable=self.v[f"connect_ch{channel}"]).pack(side="left")
+        ttk.Label(box, text="SDK 文件").grid(row=3, column=0, sticky="w", pady=3)
+        ttk.Entry(box, textvariable=self.v["dll"], width=22).grid(row=3, column=1, sticky="ew", pady=3)
         self.network_label = ttk.Label(box, text="网络设备")
-        self.network_label.grid(row=3, column=0, sticky="w", pady=3)
+        self.network_label.grid(row=4, column=0, sticky="w", pady=3)
         self.network_entry = ttk.Entry(box, textvariable=self.v["network_devices"], width=22)
-        self.network_entry.grid(row=3, column=1, sticky="ew", pady=3)
+        self.network_entry.grid(row=4, column=1, sticky="ew", pady=3)
         self.network_hint = ttk.Label(box, text="格式：型号@IP，端口 8888", style="Hint.TLabel")
-        self.network_hint.grid(row=4, column=0, columnspan=2, sticky="w")
+        self.network_hint.grid(row=5, column=0, columnspan=2, sticky="w")
         row = ttk.Frame(box, style="Panel.TFrame")
-        row.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(7, 0))
+        row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(7, 0))
         row.columnconfigure((0, 1), weight=1)
         self.scan_button = ttk.Button(row, text="扫描网络", command=self.scan_network)
         self.scan_button.grid(row=0, column=0, sticky="ew", padx=(0, 3))
         ttk.Label(row, text="PC 地址建议 24.5.10.100/8", style="Hint.TLabel").grid(row=0, column=1, sticky="w", padx=(7, 0))
         buttons = ttk.Frame(box, style="Panel.TFrame")
-        buttons.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(9, 0))
+        buttons.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(9, 0))
         buttons.columnconfigure((0, 1), weight=1)
         self.connect_button = ttk.Button(buttons, text="连接设备", command=self.connect, style="Accent.TButton")
         self.connect_button.grid(row=0, column=0, sticky="ew", padx=(0, 3))
@@ -711,10 +720,16 @@ class MariaApp(tk.Tk):
             model, ip = (part.strip() for part in token.split("@", 1))
             if not model or not ip:
                 raise ValueError("网络设备的型号和 IP 不能为空")
-            result.append(NetworkDevice(model, ip, port))
+            result.append(NetworkDevice(model, ip, port, channel=len(result) + 1))
         if not result:
             raise ValueError("请填写至少一个网络设备，或先执行扫描网络")
         return result
+
+    def _selected_channels(self) -> list[int]:
+        selected = [channel for channel in range(1, 5) if bool(self.v[f"connect_ch{channel}"].get())]
+        if not selected:
+            raise ValueError("请至少勾选一个要连接的通道")
+        return selected
 
     def scan_network(self) -> None:
         if self.running:
@@ -745,7 +760,8 @@ class MariaApp(tk.Tk):
         try:
             simulation = bool(self.v["simulation"].get())
             connection = self.v["connection"].get()
-            network = self._parse_network_devices() if connection == "网络" else []
+            selected_channels = self._selected_channels()
+            network = [item for item in self._parse_network_devices() if item.channel in selected_channels] if connection == "网络" else []
             dll = self.v["dll"].get()
         except ValueError as exc:
             messagebox.showerror("连接参数错误", str(exc))
@@ -760,8 +776,8 @@ class MariaApp(tk.Tk):
             controller = None
             try:
                 controller = SimulationController() if simulation else SeaSDKController(dll)
-                devices = controller.connect_network(network) if connection == "网络" else controller.connect_usb(4)
-                self.events.put(("connected", controller, devices))
+                devices = controller.connect_network(network) if connection == "网络" else controller.connect_usb(4, selected_channels)
+                self.events.put(("connected", controller, devices, selected_channels))
             except Exception as exc:
                 if controller:
                     try:
@@ -1144,20 +1160,24 @@ class MariaApp(tk.Tk):
                 event = self.events.get_nowait()
                 kind = event[0]
                 if kind == "connected":
-                    _, self.controller, devices = event
+                    _, self.controller, devices, selected_channels = event
                     self.connection_busy = False
                     self._set_connected_state(True)
+                    by_channel = {device.channel: device for device in devices}
                     for channel in range(1, 5):
-                        if channel <= len(devices):
-                            d = devices[channel - 1]
+                        if channel in by_channel:
+                            d = by_channel[channel]
                             self.device_tree.item(f"ch{channel}", values=(f"CH{channel}  {d.serial}", f"{d.wavelength_min:.0f}–{d.wavelength_max:.0f}", d.pixels))
+                        elif channel not in selected_channels:
+                            self.device_tree.item(f"ch{channel}", values=(f"CH{channel}  未选择", "—", "—"))
                         else:
                             self.device_tree.item(f"ch{channel}", values=(f"CH{channel}  未发现", "—", "—"))
-                    self.device_summary.set(f"{len(devices)} / 4 CHANNELS ONLINE")
+                    self.device_summary.set(f"{len(devices)} / {len(selected_channels)} SELECTED ONLINE")
                     qualifier = "仿真设备" if isinstance(self.controller, SimulationController) else "实机"
-                    self.status.set(f"连接成功 · {qualifier} · 识别 {len(devices)} 个通道")
-                    if len(devices) != 4:
-                        messagebox.showwarning("通道数量异常", f"Maria 应有 4 个通道，当前仅识别 {len(devices)} 个。可单通道采集，但请检查连接。")
+                    selected_text = "/".join(f"CH{channel}" for channel in selected_channels)
+                    self.status.set(f"连接成功 · {qualifier} · {selected_text} · 识别 {len(devices)} 个通道")
+                    if len(devices) != len(selected_channels):
+                        messagebox.showwarning("通道数量异常", f"已选择 {len(selected_channels)} 个通道，当前仅识别 {len(devices)} 个，请检查连接。")
                 elif kind == "scan":
                     found = event[1]
                     used_active_probe = event[2] if len(event) > 2 else False
