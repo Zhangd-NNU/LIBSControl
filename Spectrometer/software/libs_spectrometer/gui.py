@@ -291,7 +291,7 @@ class MariaApp(tk.Tk):
             "simulation": True,
             "connection": "USB",
             "dll": str(source_root / "vendor" / "SeaSDK.dll"),
-            "network_devices": "OH7020@24.5.10.30, OH7020@24.5.10.31, OH7020@24.5.10.32, OH7020@24.5.10.33",
+            "network_devices": "OH7020@24.5.10.31, OH7020@24.5.10.32, OH7020@24.5.10.33, OH7020@24.5.10.34",
             "port": "8888",
             "integration_us": "2000",
             "averages": "1",
