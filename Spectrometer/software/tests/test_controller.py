@@ -94,6 +94,42 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(controller.connected)
         self.assertEqual(controller.devices, [])
 
+    def test_disconnect_before_first_connection_ignores_device_not_found(self):
+        class EmptyLibrary:
+            @staticmethod
+            def seasdk_close_all_spectrometers(error):
+                error._obj.value = 2
+
+        controller = SeaSDKController.__new__(SeaSDKController)
+        controller.lib = EmptyLibrary()
+        controller._lock = threading.RLock()
+        controller.devices = []
+        controller._wavelengths = {}
+        controller.connected = False
+
+        controller.disconnect()
+
+        self.assertFalse(controller.connected)
+        self.assertEqual(controller.devices, [])
+
+    def test_disconnect_after_connection_ignores_already_closed_result(self):
+        class ClosedLibrary:
+            @staticmethod
+            def seasdk_close_all_spectrometers(error):
+                error._obj.value = 2
+
+        controller = SeaSDKController.__new__(SeaSDKController)
+        controller.lib = ClosedLibrary()
+        controller._lock = threading.RLock()
+        controller.devices = [object()]
+        controller._wavelengths = {32: (1.0,)}
+        controller.connected = True
+
+        controller.disconnect()
+
+        self.assertFalse(controller.connected)
+        self.assertEqual(controller.devices, [])
+
 
 if __name__ == "__main__":
     unittest.main()

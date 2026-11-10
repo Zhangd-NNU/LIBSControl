@@ -349,7 +349,10 @@ class SeaSDKController(BaseController):
                 self.devices = []
                 self._wavelengths = {}
                 self.connected = False
-            if error.value:
+            # SeaSDK 1.2 may report "device not found" both before the first
+            # connection and after it has successfully closed all TCP devices.
+            # In either case the desired disconnected state has been reached.
+            if error.value and error.value != 2:
                 raise self._error(error.value, "关闭光谱仪")
 
 
