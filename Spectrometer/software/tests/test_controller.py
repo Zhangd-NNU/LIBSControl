@@ -25,16 +25,11 @@ class ControllerTests(unittest.TestCase):
             NetworkDevice("OH7020", "24.5.10.31"),
         ]
 
-        class Connection:
-            def __enter__(self): return self
-            def __exit__(self, *_): return False
+        def ping(command, **kwargs):
+            return_code = 1 if command[-1].endswith(".30") else 0
+            return type("Result", (), {"returncode": return_code})()
 
-        def connect(address, timeout):
-            if address[0].endswith(".30"):
-                raise TimeoutError
-            return Connection()
-
-        with patch("libs_spectrometer.controller.socket.create_connection", side_effect=connect):
+        with patch("libs_spectrometer.controller.subprocess.run", side_effect=ping):
             found = probe_network_devices(candidates)
 
         self.assertEqual([device.ip for device in found], ["24.5.10.31"])

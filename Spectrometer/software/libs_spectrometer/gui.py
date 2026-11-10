@@ -1165,11 +1165,11 @@ class MariaApp(tk.Tk):
                     self.scan_button.configure(state="normal")
                     if found:
                         self.v["network_devices"].set(", ".join(f"{d.model}@{d.ip}" for d in found))
-                        method = "TCP 主动探测" if used_active_probe else "UDP 广播"
+                        method = "ICMP 主动探测" if used_active_probe else "UDP 广播"
                         missing = f" · {candidate_count - len(found)} 台候选设备离线" if used_active_probe and candidate_count > len(found) else ""
                         self.status.set(f"网络扫描完成 · {method}发现 {len(found)} 台光谱仪{missing}")
                     else:
-                        self.status.set("网络扫描完成 · 广播和 TCP 8888 均未发现设备；请检查设备电源、IP、网线和防火墙")
+                        self.status.set("网络扫描完成 · 广播和 ICMP 均未发现设备；请检查设备电源、IP、网线和防火墙")
                 elif kind == "parameters":
                     settings = event[1]
                     self.status.set(f"参数已应用到全部通道 · {settings['integration_us']} μs · 平均 {settings['averages']} 次")

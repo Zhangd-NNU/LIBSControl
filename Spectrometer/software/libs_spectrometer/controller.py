@@ -5,6 +5,7 @@ import math
 import random
 import re
 import socket
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -94,13 +95,23 @@ def discover_network_devices(timeout: float = 1.8, listen_port: int = 8888) -> l
 
 
 def probe_network_devices(devices: Iterable[NetworkDevice], timeout: float = 0.35) -> list[NetworkDevice]:
-    """Actively probe configured SeaSDK TCP endpoints when UDP discovery is unavailable."""
+    """Ping configured devices without occupying their single-client SeaSDK TCP port."""
     found: list[NetworkDevice] = []
+    timeout_ms = max(50, int(timeout * 1000))
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     for device in devices:
         try:
-            with socket.create_connection((device.ip, device.port), timeout=max(0.05, timeout)):
+            result = subprocess.run(
+                ["ping", "-n", "1", "-w", str(timeout_ms), device.ip],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=max(1.0, timeout + 0.5),
+                creationflags=creation_flags,
+                check=False,
+            )
+            if result.returncode == 0:
                 found.append(device)
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             continue
     return found
 
@@ -257,7 +268,14 @@ class SeaSDKController(BaseController):
                     self.disconnect()
                     raise SpectrometerError(f"添加网络设备失败：{item.model} {item.ip}:{item.port}")
                 error = ctypes.c_int(0)
-                result = self.lib.seasdk_open_spectrometer(index, ctypes.byref(error))
+                result = -1
+                for attempt in range(3):
+                    error.value = 0
+                    result = self.lib.seasdk_open_spectrometer(index, ctypes.byref(error))
+                    if result == 0 and error.value == 0:
+                        break
+                    if attempt < 2:
+                        time.sleep(0.4)
                 if result != 0 or error.value:
                     self.disconnect()
                     raise self._error(error.value or 2, f"打开网络设备 {item.ip}")
