@@ -268,6 +268,8 @@ class MariaApp(tk.Tk):
         self.dark_spectra: dict[int, Spectrum] = {}
         self.history: list[Frame] = []
         self.running = False
+        self.connection_busy = False
+        self.capture_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.sequence = 0
         self._capture_dark = False
@@ -729,7 +731,7 @@ class MariaApp(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def connect(self) -> None:
-        if self.running:
+        if self.running or self.connection_busy or self.controller:
             return
         try:
             simulation = bool(self.v["simulation"].get())
@@ -740,7 +742,10 @@ class MariaApp(tk.Tk):
             messagebox.showerror("连接参数错误", str(exc))
             return
         self.status.set("正在连接并读取四通道信息…")
+        self.connection_busy = True
         self.connect_button.configure(state="disabled")
+        self.disconnect_button.configure(state="disabled")
+        self.scan_button.configure(state="disabled")
 
         def worker():
             controller = None
@@ -750,23 +755,40 @@ class MariaApp(tk.Tk):
                 self.events.put(("connected", controller, devices))
             except Exception as exc:
                 if controller:
-                    controller.disconnect()
-                self.events.put(("error", f"连接失败：{exc}"))
+                    try:
+                        controller.disconnect()
+                    except Exception:
+                        pass
+                self.events.put(("connect_error", f"连接失败：{exc}"))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def disconnect(self) -> None:
-        self.stop_capture()
-        controller, self.controller = self.controller, None
-        if controller:
-            threading.Thread(target=controller.disconnect, daemon=True).start()
-        self.dark_spectra.clear()
-        self._set_connected_state(False)
-        self.device_summary.set("0 / 4 CHANNELS ONLINE")
-        self.metric_rate.set("离线")
-        for channel in range(1, 5):
-            self.device_tree.item(f"ch{channel}", values=(f"CH{channel}  未连接", "—", "—"))
-        self.status.set("已断开光谱仪")
+        if self.connection_busy or not self.controller:
+            return
+        self.connection_busy = True
+        self.stop_event.set()
+        controller = self.controller
+        capture_thread = self.capture_thread
+        self.connect_button.configure(state="disabled")
+        self.disconnect_button.configure(state="disabled")
+        self.scan_button.configure(state="disabled")
+        self.status.set("正在停止采集并释放光谱仪…")
+
+        def worker():
+            try:
+                if self.running:
+                    controller.cancel_external_trigger()
+                if capture_thread and capture_thread.is_alive():
+                    capture_thread.join(timeout=10.0)
+                    if capture_thread.is_alive():
+                        raise SpectrometerError("采集线程未能在 10 秒内停止；请关闭软件并重新上电后再连接")
+                controller.disconnect()
+                self.events.put(("disconnected", controller))
+            except Exception as exc:
+                self.events.put(("disconnect_error", controller, f"断开失败：{exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _set_connected_state(self, connected: bool) -> None:
         self.connect_button.configure(state="disabled" if connected else "normal")
@@ -802,7 +824,7 @@ class MariaApp(tk.Tk):
         }
 
     def apply_parameters(self) -> None:
-        if not self.controller or self.running:
+        if not self.controller or self.running or self.connection_busy:
             return
         try:
             settings = self._read_settings()
@@ -840,7 +862,7 @@ class MariaApp(tk.Tk):
             self.start_capture(1)
 
     def start_capture(self, total: int | None) -> None:
-        if not self.controller or self.running:
+        if not self.controller or self.running or self.connection_busy:
             return
         try:
             settings = self._read_settings()
@@ -920,7 +942,8 @@ class MariaApp(tk.Tk):
                 cancelled = self.stop_event.is_set() and "取消" in str(exc)
                 self.events.put(("capture_done", acquired, time.perf_counter() - started, cancelled, None if cancelled else str(exc)))
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.capture_thread = threading.Thread(target=worker, daemon=True)
+        self.capture_thread.start()
 
     def stop_capture(self) -> None:
         if not self.running:
@@ -932,9 +955,10 @@ class MariaApp(tk.Tk):
 
     def _capture_finished(self, acquired: int, elapsed: float, stopped: bool, error: str | None = None) -> None:
         self.running = False
+        self.capture_thread = None
         self._capture_dark = False
         self.stop_button.configure(state="disabled")
-        if self.controller:
+        if self.controller and not self.connection_busy:
             for button in (self.single_button, self.series_button, self.continuous_button, self.dark_button, self.apply_button):
                 button.configure(state="normal")
         if error:
@@ -1112,6 +1136,7 @@ class MariaApp(tk.Tk):
                 kind = event[0]
                 if kind == "connected":
                     _, self.controller, devices = event
+                    self.connection_busy = False
                     self._set_connected_state(True)
                     for channel in range(1, 5):
                         if channel <= len(devices):
@@ -1142,6 +1167,36 @@ class MariaApp(tk.Tk):
                     while len(args) < 4:
                         args.append(None)
                     self._capture_finished(*args)
+                elif kind == "disconnected":
+                    _, closed_controller = event
+                    if self.controller is closed_controller:
+                        self.controller = None
+                    self.connection_busy = False
+                    self.dark_spectra.clear()
+                    self._set_connected_state(False)
+                    self.device_summary.set("0 / 4 CHANNELS ONLINE")
+                    self.metric_rate.set("离线")
+                    for channel in range(1, 5):
+                        self.device_tree.item(f"ch{channel}", values=(f"CH{channel}  未连接", "—", "—"))
+                    self.status.set("已安全断开光谱仪，可以重新连接")
+                elif kind == "disconnect_error":
+                    _, controller, message = event
+                    self.connection_busy = False
+                    if self.controller is controller and controller.connected:
+                        self._set_connected_state(True)
+                    else:
+                        if self.controller is controller:
+                            self.controller = None
+                        self._set_connected_state(False)
+                    self.status_dot.configure(fg="#ef657e")
+                    self.status.set(message)
+                    messagebox.showerror("断开失败", message)
+                elif kind == "connect_error":
+                    self.connection_busy = False
+                    self._set_connected_state(False)
+                    self.status_dot.configure(fg="#ef657e")
+                    self.status.set(event[1])
+                    messagebox.showerror("连接失败", event[1])
                 elif kind == "error":
                     self.connect_button.configure(state="normal")
                     self.scan_button.configure(state="normal" if self.v["connection"].get() == "网络" else "disabled")

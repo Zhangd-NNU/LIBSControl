@@ -327,14 +327,18 @@ class SeaSDKController(BaseController):
     def disconnect(self) -> None:
         if not hasattr(self, "lib"):
             return
-        error = ctypes.c_int(0)
-        try:
-            self.lib.seasdk_close_all_spectrometers(ctypes.byref(error))
-        except (OSError, ValueError):
-            pass
-        self.devices = []
-        self._wavelengths = {}
-        self.connected = False
+        with self._lock:
+            error = ctypes.c_int(0)
+            try:
+                self.lib.seasdk_close_all_spectrometers(ctypes.byref(error))
+            except (OSError, ValueError) as exc:
+                raise SpectrometerError(f"关闭光谱仪失败：{exc}") from exc
+            finally:
+                self.devices = []
+                self._wavelengths = {}
+                self.connected = False
+            if error.value:
+                raise self._error(error.value, "关闭光谱仪")
 
 
 class SimulationController(BaseController):
