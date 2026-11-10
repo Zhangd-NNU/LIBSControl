@@ -93,6 +93,18 @@ def discover_network_devices(timeout: float = 1.8, listen_port: int = 8888) -> l
     return sorted(found.values(), key=lambda item: (item.ip, item.serial))
 
 
+def probe_network_devices(devices: Iterable[NetworkDevice], timeout: float = 0.35) -> list[NetworkDevice]:
+    """Actively probe configured SeaSDK TCP endpoints when UDP discovery is unavailable."""
+    found: list[NetworkDevice] = []
+    for device in devices:
+        try:
+            with socket.create_connection((device.ip, device.port), timeout=max(0.05, timeout)):
+                found.append(device)
+        except OSError:
+            continue
+    return found
+
+
 class BaseController:
     devices: list[DeviceInfo]
     connected: bool

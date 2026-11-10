@@ -18,6 +18,7 @@ from .controller import (
     SimulationController,
     SpectrometerError,
     discover_network_devices,
+    probe_network_devices,
 )
 from .processing import Frame, Spectrum, build_processed_frame
 
@@ -718,13 +719,21 @@ class MariaApp(tk.Tk):
     def scan_network(self) -> None:
         if self.running:
             return
+        try:
+            candidates = self._parse_network_devices()
+        except ValueError:
+            candidates = []
         self.status.set("正在监听光谱仪 UDP 广播（约 2 秒）…")
         self.scan_button.configure(state="disabled")
 
         def worker():
             try:
                 found = discover_network_devices()
-                self.events.put(("scan", found))
+                used_active_probe = False
+                if not found and candidates:
+                    found = probe_network_devices(candidates)
+                    used_active_probe = True
+                self.events.put(("scan", found, used_active_probe, len(candidates)))
             except Exception as exc:
                 self.events.put(("error", f"网络扫描失败：{exc}"))
 
@@ -1151,12 +1160,16 @@ class MariaApp(tk.Tk):
                         messagebox.showwarning("通道数量异常", f"Maria 应有 4 个通道，当前仅识别 {len(devices)} 个。可单通道采集，但请检查连接。")
                 elif kind == "scan":
                     found = event[1]
+                    used_active_probe = event[2] if len(event) > 2 else False
+                    candidate_count = event[3] if len(event) > 3 else 0
                     self.scan_button.configure(state="normal")
                     if found:
                         self.v["network_devices"].set(", ".join(f"{d.model}@{d.ip}" for d in found))
-                        self.status.set(f"网络扫描完成 · 发现 {len(found)} 台光谱仪")
+                        method = "TCP 主动探测" if used_active_probe else "UDP 广播"
+                        missing = f" · {candidate_count - len(found)} 台候选设备离线" if used_active_probe and candidate_count > len(found) else ""
+                        self.status.set(f"网络扫描完成 · {method}发现 {len(found)} 台光谱仪{missing}")
                     else:
-                        self.status.set("网络扫描完成 · 未收到光谱仪广播；请检查 PC IP 24.5.10.100/8、防火墙和网线")
+                        self.status.set("网络扫描完成 · 广播和 TCP 8888 均未发现设备；请检查设备电源、IP、网线和防火墙")
                 elif kind == "parameters":
                     settings = event[1]
                     self.status.set(f"参数已应用到全部通道 · {settings['integration_us']} μs · 平均 {settings['averages']} 次")
