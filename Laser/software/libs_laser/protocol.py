@@ -137,7 +137,7 @@ def describe_frame(frame: Frame) -> str:
         if frame.data0 == 0 and value == 0x11:
             return "联机断开"
         voltage = (frame.data0 << 8) | frame.data1
-        return f"联机成功（电压 {voltage} V，频率 {frame.data3} Hz）"
+        return f"联机成功（电压 {voltage} V，频率 {frame.data2} Hz）"
     if command == Command.VOLTAGE:
         return f"本振电压 {(frame.data0 << 8) | frame.data1} V"
     if command == Command.DIVIDER:

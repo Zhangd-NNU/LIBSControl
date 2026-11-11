@@ -16,6 +16,10 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(link_frame(True).to_bytes(), bytes.fromhex("01 11 00 00 00 00 CC 33 C3 3C"))
         self.assertEqual(link_frame(False).to_bytes(), bytes.fromhex("01 11 00 11 00 00 CC 33 C3 3C"))
 
+    def test_real_link_upload_places_frequency_in_data2(self):
+        frame = Frame.from_bytes(bytes.fromhex("01 11 02 4E 14 00 CC 33 C3 3C"))
+        self.assertEqual(frame.data2, 20)
+
     def test_voltage_encoding_matches_680v_example(self):
         self.assertEqual(voltage_frame(680).to_bytes(), bytes.fromhex("01 22 02 A8 00 00 CC 33 C3 3C"))
 

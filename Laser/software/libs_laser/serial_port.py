@@ -230,7 +230,7 @@ class SimulatedTransport:
         if command == Command.LINK:
             self.online = value != 0x11
             if self.online:
-                return Frame(Command.LINK, self.voltage >> 8, self.voltage & 0xFF, 0, self.frequency)
+                return Frame(Command.LINK, self.voltage >> 8, self.voltage & 0xFF, self.frequency, 0)
             self.prefire = self.working = self.q_enabled = False
         elif command == Command.VOLTAGE:
             self.voltage = (frame.data0 << 8) | frame.data1

@@ -12,6 +12,11 @@ from .serial_port import SimulatedTransport, WindowsSerialTransport, list_serial
 
 
 class LaserApp(tk.Tk):
+    BASE_FREQUENCY_HZ = 20
+    VOLTAGE_MIN_V = 1
+    VOLTAGE_MAX_V = 1000
+    DIVIDER_MIN = 0
+    DIVIDER_MAX = 255
     MODE_LABELS = {
         "内时序（内部 CLK / Q）": "internal",
         "外时序（外部 CLK / Q）": "external_q",
@@ -49,6 +54,7 @@ class LaserApp(tk.Tk):
             "voltage": tk.StringVar(value="680"),
             "frequency": tk.StringVar(value="20"),
             "divider": tk.StringVar(value="1"),
+            "change_frequency": tk.BooleanVar(value=False),
             "trigger_mode": tk.StringVar(value=next(iter(self.MODE_LABELS))),
             "check_water": tk.BooleanVar(value=False),
             "check_interlock": tk.BooleanVar(value=False),
@@ -260,12 +266,24 @@ class LaserApp(tk.Tk):
         params.pack(fill="x", pady=(0, 10))
         params.columnconfigure(1, weight=1)
         self._entry(params, "本振电压", "voltage", "V", 0)
-        self._entry(params, "灯频率", "frequency", "Hz", 1)
-        self._entry(params, "分频系数", "divider", "0=单次", 2)
+        self.frequency_entry = self._entry(params, "灯频率", "frequency", "Hz", 1)
+        self.frequency_entry.configure(state="disabled")
+        ttk.Checkbutton(
+            params,
+            text="修改",
+            variable=self.v["change_frequency"],
+            command=self._toggle_frequency_entry,
+        ).grid(row=1, column=3, sticky="w", padx=(5, 0), pady=2)
+        self.divider_entry = self._entry(params, "分频系数", "divider", "0-255", 2)
         self.apply_button = ttk.Button(params, text="应用全部参数", command=self.apply_parameters, style="Accent.TButton")
-        self.apply_button.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
-        ttk.Label(params, textvariable=self.q_preview, foreground="#53d9b0").grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Label(params, text="范围 1-1000 V；频率不得超过设备额定值", style="Muted.TLabel", wraplength=255).grid(row=5, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        self.apply_button.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        ttk.Label(params, textvariable=self.q_preview, foreground="#53d9b0").grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(
+            params,
+            text="允许范围：本振电压 1-1000 V；灯频率 1-255 Hz；分频系数 0-255\n分频=0：单次模式；分频=1-255：Q 输出频率 = 灯频率 ÷ 分频",
+            style="Muted.TLabel",
+            wraplength=255,
+        ).grid(row=5, column=0, columnspan=4, sticky="w", pady=(2, 0))
 
         trigger = ttk.LabelFrame(right, text=" 02  触发与时序 ", padding=8)
         trigger.pack(fill="x", pady=(0, 10))
@@ -278,17 +296,6 @@ class LaserApp(tk.Tk):
         ttk.Label(trigger, textvariable=self.trigger_help, style="Muted.TLabel", wraplength=255).grid(row=2, column=0, sticky="w", pady=(6, 0))
         ttk.Label(trigger, text="外触发：TTL 5 V · 50 Ω · 带载 ≥50 mA", foreground="#e9a34b", wraplength=255).grid(row=3, column=0, sticky="w", pady=(4, 0))
 
-        single = ttk.LabelFrame(right, text=" 03  单次触发 ", padding=8)
-        single.pack(fill="x", pady=(0, 10))
-        single.columnconfigure((0, 1), weight=1, uniform="single")
-        self.single_on = ttk.Button(single, text="进入单次模式", command=lambda: self._run_action("进入单次模式", lambda: self.controller.set_single_mode(True)))
-        self.single_off = ttk.Button(single, text="退出单次模式", command=lambda: self._run_action("退出单次模式", lambda: self.controller.set_single_mode(False)))
-        self.single_fire = ttk.Button(single, text="单次激光触发", command=self.single_trigger, style="Laser.TButton")
-        self.single_on.grid(row=0, column=0, sticky="ew", padx=(0, 3))
-        self.single_off.grid(row=0, column=1, sticky="ew", padx=(3, 0))
-        self.single_fire.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
-        ttk.Label(single, text="单次模式会设置分频=0；触发前需开启预燃和工作", style="Muted.TLabel", wraplength=255).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
-
         statusbar = ttk.Frame(self, style="Panel.TFrame")
         statusbar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(8, 10))
         ttk.Label(statusbar, text="● SYSTEM", style="Status.TLabel").pack(side="left")
@@ -299,17 +306,39 @@ class LaserApp(tk.Tk):
         self.control_buttons = [
             self.disconnect_button, self.prefire_on, self.prefire_off, self.work_on, self.work_off,
             self.q_on, self.q_off, self.stop_button, self.apply_button, self.trigger_button,
-            self.single_on, self.single_off, self.single_fire,
         ]
 
         for key in ("frequency", "divider"):
             self.v[key].trace_add("write", self._update_q_preview)
         self._safety_changed()
 
-    def _entry(self, parent, label: str, key: str, unit: str, row: int) -> None:
+    def _entry(
+        self,
+        parent,
+        label: str,
+        key: str,
+        unit: str,
+        row: int,
+        *,
+        entry_columnspan: int = 1,
+        unit_column: int = 2,
+    ) -> ttk.Entry:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=2)
-        ttk.Entry(parent, textvariable=self.v[key], width=12).grid(row=row, column=1, sticky="ew", padx=(7, 5), pady=2)
-        ttk.Label(parent, text=unit, foreground="#77878f").grid(row=row, column=2, sticky="w", pady=2)
+        entry = ttk.Entry(parent, textvariable=self.v[key], width=12)
+        entry.grid(row=row, column=1, columnspan=entry_columnspan, sticky="ew", padx=(7, 5), pady=2)
+        ttk.Label(parent, text=unit, foreground="#77878f").grid(row=row, column=unit_column, sticky="w", pady=2)
+        return entry
+
+    def _toggle_frequency_entry(self) -> None:
+        enabled = self.v["change_frequency"].get()
+        self.frequency_entry.configure(state="normal" if enabled else "disabled")
+        if enabled:
+            messagebox.showwarning(
+                "修改灯频率警告",
+                "灯频率默认值为 20 Hz，一般情况下不建议修改。\n"
+                "修改前请确认激光器铭牌、说明书及硬件允许的频率范围。",
+            )
+        self._update_q_preview()
 
     def _metric_card(self, parent, column: int, title: str, variable: tk.StringVar) -> None:
         card = ttk.Frame(parent, style="Card.TFrame", padding=(5, 6))
@@ -347,7 +376,7 @@ class LaserApp(tk.Tk):
             divider = int(self.v["divider"].get())
             if divider == 0:
                 text = "预计 Q 输出：单次触发"
-            elif frequency > 0 and divider > 0:
+            elif divider > 0:
                 text = f"预计 Q 输出：{frequency / divider:g} Hz"
             else:
                 text = "预计 Q 输出：参数无效"
@@ -411,14 +440,6 @@ class LaserApp(tk.Tk):
             return
         self._run_action("开启 Q 输出", lambda: self.controller.set_q(True))
 
-    def single_trigger(self) -> None:
-        if not self._safety_ready():
-            messagebox.showwarning("禁止单次触发", "请先完成全部出光安全确认。")
-            return
-        if not messagebox.askyesno("确认单次触发", "将立即发射一次激光脉冲，确认继续？", icon="warning"):
-            return
-        self._run_action("单次激光触发", self.controller.single_trigger)
-
     def emergency_stop(self) -> None:
         if not self.controller or not self.controller.state.serial_connected:
             return
@@ -432,12 +453,34 @@ class LaserApp(tk.Tk):
     def apply_parameters(self) -> None:
         try:
             voltage = int(self.v["voltage"].get())
-            frequency = int(self.v["frequency"].get())
+        except ValueError:
+            messagebox.showerror("电压超出范围", "本振电压必须是 1-1000 V 范围内的整数。")
+            return
+        if not self.VOLTAGE_MIN_V <= voltage <= self.VOLTAGE_MAX_V:
+            messagebox.showerror("电压超出范围", "本振电压允许范围为 1-1000 V，请重新输入。")
+            return
+
+        try:
             divider = int(self.v["divider"].get())
         except ValueError:
-            messagebox.showerror("参数错误", "电压、频率和分频系数必须是整数。")
+            messagebox.showerror("分频超出范围", "分频系数必须是 0-255 范围内的整数。")
             return
-        self._run_action("应用激光参数", lambda: self.controller.apply_parameters(voltage, frequency, divider))
+        if not self.DIVIDER_MIN <= divider <= self.DIVIDER_MAX:
+            messagebox.showerror("分频超出范围", "分频系数允许范围为 0-255；0 表示单次模式。")
+            return
+
+        frequency = None
+        if self.v["change_frequency"].get():
+            try:
+                frequency = int(self.v["frequency"].get())
+            except ValueError:
+                messagebox.showerror("灯频率超出范围", "灯频率必须是 1-255 Hz 范围内的整数。")
+                return
+            if not 1 <= frequency <= 255:
+                messagebox.showerror("灯频率超出范围", "灯频率允许范围为 1-255 Hz，建议保持默认值 20 Hz。")
+                return
+
+        self._run_action("应用激光参数", lambda: self.controller.apply_parameters(voltage, divider, frequency))
 
     def apply_trigger(self) -> None:
         mode = self.MODE_LABELS[self.v["trigger_mode"].get()]
@@ -561,7 +604,7 @@ class LaserApp(tk.Tk):
         elif state.trigger_mode == "external_q":
             hint = "外部 Q 已武装：输出由 CLK IN / Q IN 的 TTL 信号控制"
         elif state.single_mode:
-            hint = "单次模式已就绪：使用右侧“单次激光触发”"
+            hint = "单次模式（分频=0）：按正常启停流程控制 Q 输出"
         elif not state.q_enabled:
             hint = "下一步：确认光路安全后开启 Q 输出"
         else:
@@ -602,15 +645,12 @@ class LaserApp(tk.Tk):
         self.prefire_off.configure(state=normal if online and state.prefire else "disabled")
         self.work_on.configure(state=normal if online and safety and state.prefire and not state.working and not fault else "disabled")
         self.work_off.configure(state=normal if online and state.working else "disabled")
-        q_can_enable = state.trigger_mode != "external_q" and not state.single_mode
+        q_can_enable = state.trigger_mode != "external_q"
         self.q_on.configure(state=normal if online and safety and state.prefire and state.working and q_can_enable and not state.q_enabled and not fault else "disabled")
         self.q_off.configure(state=normal if online and state.q_enabled else "disabled")
         self.stop_button.configure(state=normal if connected else "disabled")
         self.apply_button.configure(state=normal if idle and not fault else "disabled")
         self.trigger_button.configure(state=normal if idle and not fault else "disabled")
-        self.single_on.configure(state=normal if idle and not state.single_mode and not fault else "disabled")
-        self.single_off.configure(state=normal if idle and state.single_mode else "disabled")
-        self.single_fire.configure(state=normal if online and safety and state.single_mode and state.prefire and state.working and not fault else "disabled")
 
     def _append_log(self, event: ControllerEvent) -> None:
         self.log_rows.append(event)
@@ -649,8 +689,11 @@ class LaserApp(tk.Tk):
     def _on_close(self) -> None:
         try:
             if self.controller and self.controller.state.serial_connected:
-                self.controller.emergency_stop()
-                self.controller.disconnect(safe=False)
+                try:
+                    self.controller.disconnect(safe=True)
+                except Exception:
+                    # disconnect 自身已在 finally 中关闭串口；关闭窗口时不再阻止程序退出。
+                    pass
         finally:
             self.destroy()
 

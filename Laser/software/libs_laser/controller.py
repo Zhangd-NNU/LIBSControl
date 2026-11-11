@@ -13,7 +13,6 @@ from .protocol import (
     byte_value_frame,
     describe_frame,
     link_frame,
-    single_trigger_frame,
     switch_frame,
     voltage_frame,
 )
@@ -113,18 +112,21 @@ class LaserController:
         with self._operation_lock:
             if not self.state.serial_connected:
                 return
-            if safe and self.state.online:
-                self.emergency_stop()
-                try:
-                    self._transact(link_frame(False), "断开设备联机", timeout=min(self.timeout, 0.4), retries=0)
-                except LaserError as exc:
-                    self._emit_event("WARN", f"联机断开未确认：{exc}")
             try:
-                self.transport.close()
+                if safe and self.state.online:
+                    self.emergency_stop()
+                    try:
+                        self._transact(link_frame(False), "断开设备联机", timeout=min(self.timeout, 0.4), retries=0)
+                    except LaserError as exc:
+                        self._emit_event("WARN", f"联机断开未确认：{exc}")
             finally:
-                self.state = LaserState()
-                self._emit_event("SYS", "串口已关闭")
-                self._emit_state()
+                # 无论设备是否应答、停机命令是否失败，都必须释放 Windows 串口句柄。
+                try:
+                    self.transport.close()
+                finally:
+                    self.state = LaserState()
+                    self._emit_event("SYS", "串口已关闭")
+                    self._emit_state()
 
     def _on_bytes(self, chunk: bytes) -> None:
         if not chunk:
@@ -157,11 +159,13 @@ class LaserController:
             else:
                 self.state.online = True
                 self.state.voltage_v = (frame.data0 << 8) | frame.data1
-                self.state.frequency_hz = frame.data3
+                # 设备联机上传帧：data0/data1 为电压，data2 为灯频率，data3 保留。
+                self.state.frequency_hz = frame.data2
         elif command == Command.VOLTAGE:
             self.state.voltage_v = (frame.data0 << 8) | frame.data1
         elif command == Command.DIVIDER:
             self.state.divider = value
+            self.state.single_mode = value == 0
         elif command == Command.FREQUENCY:
             self.state.frequency_hz = value
         elif command == Command.PREFIRE:
@@ -180,8 +184,6 @@ class LaserController:
                 0x01: "external_q",
                 0x02: "external_no_q",
             }.get(value, self.state.trigger_mode)
-        elif command == Command.SINGLE_MODE:
-            self.state.single_mode = value == 0xAA
         elif command == Command.Q_SWITCH:
             self.state.q_enabled = value == 0xBB
         elif command == Command.FAULT:
@@ -255,32 +257,43 @@ class LaserController:
     def set_voltage(self, voltage: int) -> None:
         with self._operation_lock:
             self._require_idle()
+            voltage = int(voltage)
             try:
-                frame = voltage_frame(int(voltage))
+                frame = voltage_frame(voltage)
             except (ValueError, ProtocolError) as exc:
                 raise LaserError(str(exc)) from exc
+            if self.state.voltage_v == voltage:
+                self._emit_event("SYS", f"本振电压已是 {voltage} V，跳过重复设置")
+                return
             self._transact(frame, f"设置本振电压 {voltage} V")
 
     def set_frequency(self, frequency: int) -> None:
         with self._operation_lock:
             self._require_idle()
-            if not 1 <= int(frequency) <= 255:
+            frequency = int(frequency)
+            if not 1 <= frequency <= 255:
                 raise LaserError("灯频率必须在 1-255 Hz 范围内，并不得超过设备额定频率")
-            self._transact(byte_value_frame(Command.FREQUENCY, int(frequency)), f"设置灯频率 {frequency} Hz")
+            if self.state.frequency_hz == frequency:
+                self._emit_event("SYS", f"灯频率已是 {frequency} Hz，跳过重复设置")
+                return
+            self._transact(byte_value_frame(Command.FREQUENCY, frequency), f"设置灯频率 {frequency} Hz")
 
     def set_divider(self, divider: int) -> None:
         with self._operation_lock:
             self._require_idle()
-            if not 0 <= int(divider) <= 255:
+            divider = int(divider)
+            if not 0 <= divider <= 255:
                 raise LaserError("分频系数必须在 0-255 范围内；0 表示单次模式")
-            if self.state.single_mode and int(divider) != 0:
-                raise LaserError("请先退出单次模式，再设置连续工作的分频系数")
-            self._transact(byte_value_frame(Command.DIVIDER, int(divider)), f"设置分频系数 {divider}")
+            if self.state.divider == divider:
+                self._emit_event("SYS", f"分频系数已是 {divider}，跳过重复设置")
+                return
+            self._transact(byte_value_frame(Command.DIVIDER, divider), f"设置分频系数 {divider}")
 
-    def apply_parameters(self, voltage: int, frequency: int, divider: int) -> None:
+    def apply_parameters(self, voltage: int, divider: int, frequency: int | None = None) -> None:
         with self._operation_lock:
             self.set_voltage(voltage)
-            self.set_frequency(frequency)
+            if frequency is not None:
+                self.set_frequency(frequency)
             self.set_divider(divider)
 
     def set_trigger_mode(self, mode: str) -> None:
@@ -288,8 +301,6 @@ class LaserController:
             self._require_idle()
             if mode not in self.TRIGGER_MODES:
                 raise LaserError(f"未知触发模式：{mode}")
-            if self.state.single_mode:
-                raise LaserError("请先退出单次模式，再切换触发方式")
             value = self.TRIGGER_MODES[mode]
             if mode.startswith("external"):
                 self._transact(byte_value_frame(Command.CLOCK, 0x77), "开启外时序")
@@ -322,27 +333,7 @@ class LaserController:
                 raise LaserError("必须先开启预燃和工作，才能开启 Q 输出")
             if enabled and self.state.trigger_mode == "external_q":
                 raise LaserError("当前为外时序（外部 Q），Q 输出由 Q IN 信号控制")
-            if enabled and self.state.single_mode:
-                raise LaserError("单次模式下请使用“单次激光触发”，不能连续开启 Q")
             self._transact(switch_frame(Command.Q_SWITCH, enabled), "开启 Q 输出" if enabled else "关闭 Q 输出")
-
-    def set_single_mode(self, enabled: bool) -> None:
-        with self._operation_lock:
-            self._require_idle()
-            if enabled and self.state.trigger_mode != "internal":
-                raise LaserError("单次模式仅允许在内时序下开启")
-            if enabled and self.state.divider != 0:
-                self.set_divider(0)
-            self._transact(switch_frame(Command.SINGLE_MODE, enabled), "开启单次模式" if enabled else "关闭单次模式")
-
-    def single_trigger(self) -> None:
-        with self._operation_lock:
-            self._require_online()
-            if not self.state.single_mode or self.state.divider != 0:
-                raise LaserError("请先开启单次模式（分频系数将设为 0）")
-            if not (self.state.prefire and self.state.working):
-                raise LaserError("单次触发前必须开启预燃和工作")
-            self._transact(single_trigger_frame(), "单次激光触发")
 
     def emergency_stop(self) -> None:
         """不等待应答，立即按 Q→工作→预燃顺序下发关闭帧。"""

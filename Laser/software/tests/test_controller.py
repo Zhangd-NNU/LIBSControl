@@ -21,11 +21,27 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.state.frequency_hz, 20)
 
     def test_parameter_application(self):
-        self.controller.apply_parameters(850, 20, 4)
+        self.controller.apply_parameters(850, 4)
         self.assertEqual(self.controller.state.voltage_v, 850)
         self.assertEqual(self.controller.state.frequency_hz, 20)
         self.assertEqual(self.controller.state.divider, 4)
         self.assertEqual(self.controller.state.output_frequency_hz, 5)
+
+    def test_parameter_application_leaves_divider_unchanged_by_default(self):
+        self.controller.set_divider(4)
+        self.controller.apply_parameters(850, 4)
+        self.assertEqual(self.controller.state.divider, 4)
+
+    def test_reapplying_current_values_does_not_wait_for_device_reply(self):
+        self.controller.apply_parameters(680, 1, 20)
+        self.assertEqual(self.controller.state.voltage_v, 680)
+        self.assertEqual(self.controller.state.divider, 1)
+
+    def test_frequency_is_only_changed_when_explicitly_supplied(self):
+        self.controller.apply_parameters(850, 4)
+        self.assertEqual(self.controller.state.frequency_hz, 20)
+        self.controller.apply_parameters(850, 4, 25)
+        self.assertEqual(self.controller.state.frequency_hz, 25)
 
     def test_normal_start_and_stop_sequence(self):
         self.controller.set_prefire(True)
@@ -63,24 +79,15 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(LaserError, "Q IN"):
             self.controller.set_q(True)
 
-    def test_single_trigger_flow(self):
-        self.controller.set_single_mode(True)
+    def test_divider_zero_selects_single_mode(self):
+        self.controller.set_divider(0)
         self.assertEqual(self.controller.state.divider, 0)
-        self.controller.set_prefire(True)
-        self.controller.set_work(True)
-        self.controller.single_trigger()
+        self.assertTrue(self.controller.state.single_mode)
 
-    def test_single_mode_requires_internal_clock(self):
-        self.controller.set_trigger_mode("external_no_q")
-        with self.assertRaisesRegex(LaserError, "内时序"):
-            self.controller.set_single_mode(True)
-
-    def test_single_mode_rejects_continuous_q(self):
-        self.controller.set_single_mode(True)
-        self.controller.set_prefire(True)
-        self.controller.set_work(True)
-        with self.assertRaisesRegex(LaserError, "单次模式"):
-            self.controller.set_q(True)
+    def test_nonzero_divider_exits_single_mode(self):
+        self.controller.set_divider(0)
+        self.controller.set_divider(4)
+        self.assertFalse(self.controller.state.single_mode)
 
     def test_fault_locks_start(self):
         self.transport.inject_fault(1)
@@ -100,6 +107,16 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(self.controller.state.prefire)
         self.assertFalse(self.controller.state.working)
         self.assertFalse(self.controller.state.q_enabled)
+
+    def test_disconnect_always_releases_serial_after_write_failure(self):
+        def fail_write(_data):
+            raise OSError("simulated write failure")
+
+        self.transport.write = fail_write
+        with self.assertRaises(LaserError):
+            self.controller.disconnect(safe=True)
+        self.assertFalse(self.transport.is_open)
+        self.assertFalse(self.controller.state.serial_connected)
 
 
 if __name__ == "__main__":
